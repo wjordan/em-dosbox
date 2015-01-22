@@ -7,4 +7,7 @@ before_install:
 - tar xf fastcomp_ubuntu1204.tar.gz -C /tmp/em
 - 'export PATH=$PATH:/tmp/em'
 - 'export LLVM_ROOT=/tmp/em'
-script: emconfigure ./configure && emconfigure ./configure --with-sdl2 && emmake make
+script:
+- emconfigure
+- emconfigure ./configure
+- emmake make
