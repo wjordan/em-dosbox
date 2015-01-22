@@ -1,5 +1,6 @@
 language: cpp
 before_install:
+- sudo apt-get install -y libc6-dev-i386 lib32stdc++6 gcc-multilib g++-multilib
 - wget https://dl.dropboxusercontent.com/u/1463845/osxcross/emscripten_ubuntu1204.tar.gz
 - wget https://dl.dropboxusercontent.com/u/1463845/osxcross/fastcomp_ubuntu1204.tar.gz
 - mkdir /tmp/em
