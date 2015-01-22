@@ -1,0 +1,9 @@
+language: cpp
+before_install:
+- wget https://dl.dropboxusercontent.com/u/1463845/osxcross/emscripten_ubuntu1204.tar.gz
+- wget https://dl.dropboxusercontent.com/u/1463845/osxcross/fastcomp_ubuntu1204.tar.gz
+- mkdir /tmp/em
+- tar xf emscripten_ubuntu1204.tar.gz -C /tmp/em
+- tar xf fastcomp_ubuntu1204.tar.gz -C /tmp/em
+- 'export PATH=$PATH:/tmp/em'
+script: emconfigure ./configure --with-sdl2 && emmake make
