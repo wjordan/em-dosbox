@@ -1,0 +1,11 @@
+machine:
+  services:
+    - docker
+dependencies:
+  override:
+    - sudo apt-get install automake
+    - ./autogen.sh
+    - docker run -v $(pwd):/src -t apiaryio/base-emscripten-dev /bin/bash -c "emconfigure ./configure && emmake make"
+test:
+  override:
+    - cp src/dosbox.{html,html.mem,ico,js} $CIRCLE_ARTIFACTS
