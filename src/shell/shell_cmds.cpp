@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2013  The DOSBox Team
+ *  Copyright (C) 2002-2015  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -303,13 +303,25 @@ void DOS_Shell::CMD_EXIT(char * args) {
 void DOS_Shell::CMD_CHDIR(char * args) {
 	HELP("CHDIR");
 	StripSpaces(args);
+	Bit8u drive = DOS_GetDefaultDrive()+'A';
+	char dir[DOS_PATHLENGTH];
 	if (!*args) {
-		Bit8u drive=DOS_GetDefaultDrive()+'A';
-		char dir[DOS_PATHLENGTH];
 		DOS_GetCurrentDir(0,dir);
 		WriteOut("%c:\\%s\n",drive,dir);
 	} else if(strlen(args) == 2 && args[1]==':') {
-		WriteOut(MSG_Get("SHELL_CMD_CHDIR_HINT"),toupper(*reinterpret_cast<unsigned char*>(&args[0])));
+		Bit8u targetdrive = (args[0] | 0x20)-'a' + 1;
+		unsigned char targetdisplay = *reinterpret_cast<unsigned char*>(&args[0]);
+		if(!DOS_GetCurrentDir(targetdrive,dir)) {
+			if(drive == 'Z') {
+				WriteOut(MSG_Get("SHELL_EXECUTE_DRIVE_NOT_FOUND"),toupper(targetdisplay));
+			} else {
+				WriteOut(MSG_Get("SHELL_ILLEGAL_PATH"));
+			}
+			return;
+		}
+		WriteOut("%c:\\%s\n",toupper(targetdisplay),dir);
+		if(drive == 'Z')
+			WriteOut(MSG_Get("SHELL_CMD_CHDIR_HINT"),toupper(targetdisplay));
 	} else 	if (!DOS_ChangeDir(args)) {
 		/* Changedir failed. Check if the filename is longer then 8 and/or contains spaces */
 	   
@@ -334,8 +346,7 @@ void DOS_Shell::CMD_CHDIR(char * args) {
 			temps += "~1";
 			WriteOut(MSG_Get("SHELL_CMD_CHDIR_HINT_2"),temps.insert(0,slashpart).c_str());
 		} else {
-			Bit8u drive=DOS_GetDefaultDrive()+'A';
-			if (drive=='Z') {
+			if (drive == 'Z') {
 				WriteOut(MSG_Get("SHELL_CMD_CHDIR_HINT_3"));
 			} else {
 				WriteOut(MSG_Get("SHELL_CMD_CHDIR_ERROR"),args);
@@ -583,8 +594,8 @@ void DOS_Shell::CMD_COPY(char * args) {
 		dos.dta(save_dta);
 		return;
 	}
-	// Gather all sources (extension to copy more then 1 file specified at commandline)
-	// Concatating files go as follows: All parts except for the last bear the concat flag.
+	// Gather all sources (extension to copy more then 1 file specified at command line)
+	// Concatenating files go as follows: All parts except for the last bear the concat flag.
 	// This construction allows them to be counted (only the non concat set)
 	char* source_p = NULL;
 	char source_x[DOS_PATHLENGTH+CROSS_LEN];
@@ -670,14 +681,17 @@ void DOS_Shell::CMD_COPY(char * args) {
 		char* temp = strstr(pathTarget,"*.*");
 		if(temp) *temp = 0;//strip off *.* from target
 	
-		// add '\\' if target is a directoy
+		// add '\\' if target is a directory
+		bool target_is_file = true;
 		if (pathTarget[strlen(pathTarget)-1]!='\\') {
 			if (DOS_FindFirst(pathTarget,0xffff & ~DOS_ATTR_VOLUME)) {
 				dta.GetResult(name,size,date,time,attr);
-				if (attr & DOS_ATTR_DIRECTORY)	
+				if (attr & DOS_ATTR_DIRECTORY) {
 					strcat(pathTarget,"\\");
+					target_is_file = false;
+				}
 			}
-		};
+		} else target_is_file = false;
 
 		//Find first sourcefile
 		bool ret = DOS_FindFirst(const_cast<char*>(source.filename.c_str()),0xffff & ~DOS_ATTR_VOLUME);
@@ -690,7 +704,8 @@ void DOS_Shell::CMD_COPY(char * args) {
 		Bit16u sourceHandle,targetHandle;
 		char nameTarget[DOS_PATHLENGTH];
 		char nameSource[DOS_PATHLENGTH];
-
+		
+		bool second_file_of_current_source = false;
 		while (ret) {
 			dta.GetResult(name,size,date,time,attr);
 
@@ -703,7 +718,11 @@ void DOS_Shell::CMD_COPY(char * args) {
 					strcpy(nameTarget,pathTarget);
 					if (nameTarget[strlen(nameTarget)-1]=='\\') strcat(nameTarget,name);
 
-					//Don't create a newfile when in concat mode
+					//Special variable to ensure that copy * a_file, where a_file is not a directory concats.
+					bool special = second_file_of_current_source && target_is_file;
+					second_file_of_current_source = true; 
+					if (special) oldsource.concat = true;
+					//Don't create a new file when in concat mode
 					if (oldsource.concat || DOS_CreateFile(nameTarget,0,&targetHandle)) {
 						Bit32u dummy=0;
 						//In concat mode. Open the target and seek to the eof
@@ -720,7 +739,7 @@ void DOS_Shell::CMD_COPY(char * args) {
 							failed |= DOS_CloseFile(sourceHandle);
 							failed |= DOS_CloseFile(targetHandle);
 							WriteOut(" %s\n",name);
-							if(!source.concat) count++; //Only count concat files once
+							if(!source.concat && !special) count++; //Only count concat files once
 						} else {
 							DOS_CloseFile(sourceHandle);
 							WriteOut(MSG_Get("SHELL_CMD_COPY_FAILURE"),const_cast<char*>(target.filename.c_str()));
@@ -731,8 +750,9 @@ void DOS_Shell::CMD_COPY(char * args) {
 					}
 				} else WriteOut(MSG_Get("SHELL_CMD_COPY_FAILURE"),const_cast<char*>(source.filename.c_str()));
 			};
-			//On the next file
-			ret = DOS_FindNext();
+			//On to the next file if the previous one wasn't a device
+			if ((attr&DOS_ATTR_DEVICE) == 0) ret = DOS_FindNext();
+			else ret = false;
 		};
 	}
 

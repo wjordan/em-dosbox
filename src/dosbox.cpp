@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2013  The DOSBox Team
+ *  Copyright (C) 2002-2015  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -45,6 +45,10 @@
 #include "ints/int10.h"
 #include "render.h"
 #include "pci_bus.h"
+
+#if !SDL_VERSION_ATLEAST(2,0,0)
+#define SDL_TICKS_PASSED(A, B)  ((Sint32)((B) - (A)) <= 0)
+#endif
 
 Config * control;
 MachineType machine;
@@ -133,13 +137,45 @@ Bit32u ticksScheduled;
 bool ticksLocked;
 
 #ifdef EMSCRIPTEN
+#ifdef EMTERPRETER_SYNC
+int nosleep_lock = 0;
+#else
 static int runcount = 0;
+#endif
 #endif
 
 static Bitu Normal_Loop(void) {
 	Bits ret;
 #ifdef EMSCRIPTEN
 	int ticksEntry = GetTicks();
+#ifdef EMTERPRETER_SYNC
+	/* Normal DOSBox is free to use up all available host CPU time, but
+	 * in a browser, sleep has to happen regularly so the screen is updated,
+	 * sound isn't interrupted, and the script does not appear to hang.
+	 */
+	static Bitu last_sleep = 0;
+	static Bitu last_loop = 0;
+	if (SDL_TICKS_PASSED(ticksEntry, last_sleep + 10)) {
+		if (nosleep_lock == 0) {
+			last_sleep = ticksEntry;
+			emscripten_sleep_with_yield(1);
+			ticksEntry = GetTicks();
+		} else if (SDL_TICKS_PASSED(ticksEntry, last_sleep + 2000) &&
+		           !SDL_TICKS_PASSED(ticksEntry, last_loop + 200)) {
+			/* Emterpreter makes code much slower, so the CPU interpreter does
+			 * not use it. That means it must not be interrupted using
+			 * emscripten_sleep(). Normally, CPU interpreter recursion should
+			 * only involve brief CPU exceptions, so this should not be
+			 * triggered. Sometimes DOSBox fails to detect return from
+			 * exception. Timeout must not be triggered when the browser is
+			 * running slow overall or the page is in the background.
+			 */
+			LOG_MSG("Emulation aborted due to nested emulation timeout.");
+			em_exit(1);
+		}
+	}
+	last_loop = ticksEntry;
+#endif
 #endif
 	while (1) {
 		if (PIC_RunQueue()) {
@@ -268,6 +304,14 @@ increaseticks:
 					if (new_cmax<CPU_CYCLES_LOWER_LIMIT)
 						new_cmax=CPU_CYCLES_LOWER_LIMIT;
 
+					/*
+					LOG_MSG("cyclelog: current %6d   cmax %6d   ratio  %5d  done %3d   sched %3d",
+						CPU_CycleMax,
+						new_cmax,
+						ratio,
+						ticksDone,
+						ticksScheduled);
+					*/  
 					/* ratios below 1% are considered to be dropouts due to
 					   temporary load imbalance, the cycles adjusting is skipped */
 					if (ratio>10) {
@@ -316,6 +360,11 @@ increaseticks:
 			ticksAdded = 0;
 #ifndef EMSCRIPTEN
 			SDL_Delay(1);
+#elif defined(EMTERPRETER_SYNC)
+			if (nosleep_lock == 0) {
+				last_sleep = ticksNew;
+				emscripten_sleep_with_yield(1);
+			}
 #endif
 			ticksDone -= GetTicks() - ticksNew;
 			if (ticksDone < 0)
@@ -368,7 +417,7 @@ static void em_main_loop(void) {
 #endif
 
 void DOSBOX_RunMachine(void){
-#ifdef EMSCRIPTEN
+#if defined(EMSCRIPTEN) && !defined(EMTERPRETER_SYNC)
 	if (runcount == 0) {
 		runcount = 1;
 	} else if (runcount == 1) {
@@ -385,7 +434,7 @@ void DOSBOX_RunMachine(void){
 	Bitu ret;
 	do {
 		ret=(*loop)();
-#ifdef EMSCRIPTEN
+#if defined(EMSCRIPTEN) && !defined(EMTERPRETER_SYNC)
 		/* These should be very short operations, like interrupts.
 		 * Anything taking a long time will probably run indefinitely,
 		 * making DOSBox appear to hang.

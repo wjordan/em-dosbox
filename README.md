@@ -17,69 +17,96 @@ for more information.
 Status
 ------
 
-Currently, DOSBox compiles and runs various real-mode games successfully.
-DOSBox has not been fully re-structured for running in a web browser via the
-Emscripten main loop. Some programs can cause DOSBox to run a loop without
-returning control to the browser, causing DOSBox to appear to hang.
-The interactive DOS prompt cannot be used and leads to a
-hang. DOSBox can only run programs via command line arguments.
+Em-DOSBox runs most games successfully in web browsers. Although DOSBox has
+not been fully re-structured for running as an Emscripten main loop, most
+functionality is available thanks to emterpreter sync. A few programs can
+still run into problems due to paging exceptions.
 
 Other issues
 ------------
 
-* Emscripten issues
-[1975](https://github.com/kripken/emscripten/issues/1975) and
-[1992](https://github.com/kripken/emscripten/issues/1992) were problems in
-the past. Use Emscripten 1.8.11 or later.
+* Game save files are written into the Emscripten file system, which is by
+  default an in-memory file system. Saved games will be lost when you close
+  the web page.
+* Compiling in Windows is not supported. The build process requires a
+  Unix-like environment due to use of GNU Autotools. See Emscripten
+  [issue 2208](https://github.com/kripken/emscripten/issues/2208).
 * Emscripten [issue 1909](https://github.com/kripken/emscripten/issues/1909)
-makes some switch statements highly inefficient. The main switch statements
-used for CPU emulation end up using long chains of comparisons, making DOSBox
-very slow. This problem does not have a proper fix. This
-[patch](https://gist.github.com/dreamlayers/8463670) is not totally correct,
-but it can be used and gives good performance in Firefox.
-* V8 JavaScript Engine [issue
+used to make large switch statements highly inefficient. It seems fixed now,
+but V8 JavaScript Engine [issue
 2275](http://code.google.com/p/v8/issues/detail?id=2275) prevents large switch
-statements from being optimized. Because of this and emscripten issue 1909,
-the simple, normal and prefetch cores are automatically transformed. Case
+statements from being optimized. Because of this, the simple, normal and
+prefetch cores are automatically transformed. Case
 statements for x86 instructions become functions, and an array of function
 pointers is used instead of the switch statements. The `--enable-funarray`
 configure option controls this and defaults to yes.
 * The same origin policy prevents access to data files when running via a
-file:// URL in Chrome. Use a web server such as `python -m SimpleHTTPServer`
-instead.
+file:// URL in some browsers. Use a web server such as
+`python -m SimpleHTTPServer` instead.
 * In Firefox, ensure that
 [dom.max\_script\_run\_time](http://kb.mozillazine.org/Dom.max_script_run_time)
  is set to a reasonable value that will allow you to regain control in case of
 a hang.
 * Firefox may use huge amounts of memory when starting asm.js builds which have
 not been minified.
+* The FPU code uses doubles and does not provide full 80 bit precision.
+DOSBox can only give full precision when running on an x86 CPU.
 
 Compiling
 ---------
 
-Configure with `emconfigure ./configure` and build with `make`.
+Use the latest stable version of Emscripten (from the master branch). For
+more information see the the
+[Emscripten installation instructions](https://kripken.github.io/emscripten-site/docs/getting_started/downloads.html).
+Em-DOSBox depends on bug fixes and new features found in recent versions of
+Emscripten. Some Linux distributions have packages with old versions, which
+should not be used.
+
+First, create `./configure` by running `./autogen.sh`. Then
+configure with `emconfigure ./configure` and build with `make`.
 This will create `src/dosbox.js` which contains DOSBox and `src/dosbox.html`,
 a web page for use as a template by the packager. These cannot be used as-is.
 You need to provide DOSBox with files to run and command line arguments for
 running them.
 
-This branch supports use of SDL 2, but uses SDL 1 by default. To use SDL 2,
-give the `--with-sdl2` option to `./configure`. Emscripten will automatically
-fetch SDL 2 from Emscripten Ports and build it. If you want to use a different
-copy of SDL 2, specify a path as in
-`./configure --with-sdl2=/path/to/SDL-emscripten`.
+This branch supports SDL 2 and uses it by default. Emscripten will
+automatically fetch SDL 2 from Emscripten Ports and build it. Use of `make -j`
+to speed up compilation by running multiple Emscripten processes in parallel
+[may break this](https://github.com/kripken/emscripten/issues/3033).
+Once SDL 2 has been built by Emscripten, you can use `make -j`.
+To use a different pre-built copy of Emscripten SDL 2, specify a path as in
+`emconfigure ./configure --with-sdl2=/path/to/SDL-emscripten`. To use SDL 1,
+give a `--with-sdl2=no` or `--without-sdl2` argument to `./configure`.
 
-If the Emscripten
+Emscripten emterpreter sync is used by default. This enables more DOSBox
+features to work, but requires an Emscripten version after 1.29.4 and may
+cause a small performance penalty. To disable use of emterpreter sync,
+add the `--disable-sync` argument to `./configure`. When sync is used,
+the Emscripten
 [memory initialization file](https://kripken.github.io/emscripten-site/docs/optimizing/Optimizing-Code.html#memory-initialization)
-is enabled, `dosbox.html.mem` needs to be in the same folder as `dosbox.js`.
-The memory initialization file is large but it compresses well. If served in
-compressed format, it should save bandwidth and speed up startup.
+is enabled, which means `dosbox.html.mem` needs to be in the same folder as
+`dosbox.js`. The memory initialization file is large. Serve it in compressed
+format to save bandwidth.
 
-Packaging DOS programs
-----------------------
+Running DOS Programs
+--------------------
 
-Web pages for running DOS programs can be created using the `src/packager.py`
-Python script. If you have a single DOS executable such as `Gwbasic.exe`, place
+To run DOS programs, you need to provide a suitable web page, load files into
+the Emscripten file system, and give command line arguments to DOSBox. The
+simplest method is by using the included packager tools.
+
+The normal packager tool is `src/packager.py`, which runs the Emscripten
+packager. It requires `dosbox.html`, which is created when building Em-DOSBox.
+If you do not have Emscripten installed, you need to use `src/repackager.py`
+instead. Any packager or repackager HTML output file can be used as a template
+for the repackager. Name it `template.html` and put it in the same directory
+as `repackager.py`.
+
+The following instructions assume use of the normal packager. If using
+repackager, replace `packager.py` with `repackager.py`. You need
+[Python 2](https://www.python.org/downloads/) to run either packager.
+
+If you have a single DOS executable such as `Gwbasic.exe`, place
 it in the same `src` directory as `packager.py` and package it using:
 
 ```./packager.py gwbasic Gwbasic.exe```
@@ -135,4 +162,6 @@ to compile with Emscripten, but didn't get it to work.
 [Boris Gjenero](https://github.com/dreamlayers)
 started with that and got it to work. Then, Boris re-implemented
 Ismail's changes a cleaner way, fixed issues and improved performance to make
-many games usable in web browsers.
+many games usable in web browsers. Meanwhile,
+[Alon Zakai](https://github.com/kripken/) quickly fixed Emscripten bugs which
+were encountered and added helpful Emscripten features.

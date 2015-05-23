@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2014  The DOSBox Team
+ *  Copyright (C) 2002-2015  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@
 #define _GNU_SOURCE
 #endif
 
+#include "config.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -30,6 +31,10 @@
 #ifdef WIN32
 #include <signal.h>
 #include <process.h>
+#endif
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#include <html5.h>
 #endif
 
 #include "cross.h"
@@ -282,6 +287,23 @@ SDL_Surface* SDL_SetVideoMode_Wrap(int width,int height,int bpp,Bit32u flags){
 	}
 
 #endif
+#ifdef WIN32
+	//SDL seems to crash if we are in OpenGL mode currently and change to exactly the same size without OpenGL.
+	//This happens when DOSBox is in textmode with aspect=true and output=opengl and the mapper is started.
+	//The easiest solution is to change the size. The mapper doesn't care. (PART PXX)
+
+	//Also we have to switch back to windowed mode first, as else it may crash as well.
+	//Bug: we end up with a locked mouse cursor, but at least that beats crashing. (output=opengl,aspect=true,fullscreen=true)
+	if((i_flags&SDL_OPENGL) && !(flags&SDL_OPENGL) && (i_flags&SDL_FULLSCREEN) && !(flags&SDL_FULLSCREEN)){
+		GFX_SwitchFullScreen();
+		return SDL_SetVideoMode_Wrap(width,height,bpp,flags);
+	}
+
+	//PXX
+	if ((i_flags&SDL_OPENGL) && !(flags&SDL_OPENGL) && height==i_height && width==i_width && height==480) {
+		height++;
+	}
+#endif
 	SDL_Surface* s = SDL_SetVideoMode(width,height,bpp,flags);
 #if SETMODE_SAVES
 	if (s == NULL) return s; //Only store when successful
@@ -385,7 +407,15 @@ static void PauseDOSBox(bool pressed) {
 				break;
 			}
 #if defined (MACOSX)
-			if (event.key.keysym.sym == SDLK_q && (event.key.keysym.mod == KMOD_RMETA || event.key.keysym.mod == KMOD_LMETA) ) {
+			if (event.key.keysym.sym == SDLK_q &&
+#if SDL_VERSION_ATLEAST(2,0,0)
+			    (event.key.keysym.mod == KMOD_RGUI ||
+			     event.key.keysym.mod == KMOD_LGUI)
+#else
+			    (event.key.keysym.mod == KMOD_RMETA ||
+			     event.key.keysym.mod == KMOD_LMETA)
+#endif
+			   ) {
 				/* On macs, all aps exit when pressing cmd-q */
 				KillSwitch(true);
 				break;
@@ -877,15 +907,28 @@ dosurface:
 			LOG_MSG("SDL:Can't create renderer, falling back to surface");
 			goto dosurface;
 		}
+
 		/* SDL_PIXELFORMAT_ARGB8888 is possible with most
 		rendering drivers, "opengles" being a notable exception */
-		sdl.texture.texture = SDL_CreateTexture(sdl.renderer, SDL_PIXELFORMAT_ARGB8888,
+		sdl.texture.texture = SDL_CreateTexture(sdl.renderer,
+#ifdef EMSCRIPTEN
+		// Since Emscripten SDL 2 surface is BGR, things are hard-coded
+		// to use BGR and GFX_RGBONLY actuall means BGRONLY.
+		                                        SDL_PIXELFORMAT_ABGR8888,
+#else
+		                                        SDL_PIXELFORMAT_ARGB8888,
+#endif
 		                                        SDL_TEXTUREACCESS_STREAMING, width, height);
 		/* SDL_PIXELFORMAT_ABGR8888 (not RGB) is the
 		only supported format for the "opengles" driver */
 		if (!sdl.texture.texture) {
 			if (flags & GFX_RGBONLY) goto dosurface;
-			sdl.texture.texture = SDL_CreateTexture(sdl.renderer, SDL_PIXELFORMAT_ABGR8888,
+			sdl.texture.texture = SDL_CreateTexture(sdl.renderer,
+#ifdef EMSCRIPTEN
+			                                        SDL_PIXELFORMAT_ARGB8888,
+#else
+			                                        SDL_PIXELFORMAT_ABGR8888,
+#endif
 			                                        SDL_TEXTUREACCESS_STREAMING, width, height);
 		}
 		if (!sdl.texture.texture) {
@@ -1102,8 +1145,29 @@ dosurface:
 	return retFlags;
 }
 
+#ifdef EMSCRIPTEN
+static bool use_capture_callback = false;
+static void doGFX_CaptureMouse(void);
 
 void GFX_CaptureMouse(void) {
+	if (use_capture_callback) {
+		if (sdl.mouse.locked) {
+			emscripten_exit_pointerlock();
+		} else {
+			//This only raises a request. A callback will notify when pointer
+			// lock starts. The user may need to confirm a browser dialog.
+			emscripten_request_pointerlock(NULL, true);
+		}
+	} else {
+		doGFX_CaptureMouse();
+	}
+}
+
+static void doGFX_CaptureMouse(void)
+#else
+void GFX_CaptureMouse(void)
+#endif
+{
 	sdl.mouse.locked=!sdl.mouse.locked;
 	if (sdl.mouse.locked) {
 #if SDL_VERSION_ATLEAST(2,0,0)
@@ -1149,6 +1213,20 @@ static void CaptureMouse(bool pressed) {
 		return;
 	GFX_CaptureMouse();
 }
+
+#ifdef EMSCRIPTEN
+EM_BOOL em_pointerlock_callback(int eventType,
+                          const EmscriptenPointerlockChangeEvent *keyEvent,
+                          void *userData) {
+	if (eventType == EMSCRIPTEN_EVENT_POINTERLOCKCHANGE) {
+		if ((!keyEvent->isActive && sdl.mouse.locked) ||
+			(keyEvent->isActive && !sdl.mouse.locked)) {
+			doGFX_CaptureMouse();
+		}
+	}
+	return false;
+}
+#endif
 
 #if defined (WIN32)
 STICKYKEYS stick_keys = {sizeof(STICKYKEYS), 0};
@@ -1470,11 +1548,11 @@ Bitu GFX_GetRGB(Bit8u red,Bit8u green,Bit8u blue) {
 	case SCREEN_SURFACE_DDRAW:
 #endif
 		return SDL_MapRGB(sdl.surface->format,red,green,blue);
-#ifndef EMSCRIPTEN
 #if SDL_VERSION_ATLEAST(2,0,0)
 	case SCREEN_TEXTURE:
 		return SDL_MapRGB(sdl.texture.pixelFormat,red,green,blue);
 #else
+#ifndef EMSCRIPTEN
 	case SCREEN_OVERLAY:
 		{
 			Bit8u y =  ( 9797*(red) + 19237*(green) +  3734*(blue) ) >> 15;
@@ -1486,8 +1564,8 @@ Bitu GFX_GetRGB(Bit8u red,Bit8u green,Bit8u blue) {
 			return (u << 0) | (y << 8) | (v << 16) | (y << 24);
 #endif
 		}
-#endif	// !SDL_VERSION_ATLEAST(2,0,0)
 #endif /* !EMSCRIPTEN */
+#endif	// !SDL_VERSION_ATLEAST(2,0,0)
 	case SCREEN_OPENGL:
 		//USE BGRA otherwise
 		return ((blue << 0) | (green << 8) | (red << 16)) | (255 << 24);
@@ -1811,7 +1889,7 @@ static void GUI_StartUp(Section * sec) {
 			sdl.desktop.want_type=SCREEN_SURFACE;
 		}
 	}
-	if (sdl.desktop.want_type=SCREEN_OPENGL) {
+	if (sdl.desktop.want_type==SCREEN_OPENGL) {
 #else	// Same story but for SDL 1.2
 	sdl.surface=SDL_SetVideoMode_Wrap(640,400,0,SDL_OPENGL);
 	if (sdl.surface == NULL) {
@@ -1883,8 +1961,17 @@ static void GUI_StartUp(Section * sec) {
     Bit32u bmask = 0x00ff0000;
 //#endif
 
+/* I'm sorry about disabling this in some circumstances, but:
+ * The splash screen requires emterpreter sync.
+ * Creating a 2D context prevents subsequent creation of a 3D context.
+ */
+#if !defined(EMSCRIPTEN) || defined(EMTERPRETER_SYNC)
 /* Please leave the Splash screen stuff in working order in DOSBox. We spend a lot of time making DOSBox. */
-	SDL_Surface* splash_surf = SDL_CreateRGBSurface(SDL_SWSURFACE, 640, 400, 32, rmask, gmask, bmask, 0);
+	SDL_Surface* splash_surf = NULL;
+#ifdef EMSCRIPTEN
+	if (output != "texture" && output != "texturenb")
+#endif
+		splash_surf = SDL_CreateRGBSurface(SDL_SWSURFACE, 640, 400, 32, rmask, gmask, bmask, 0);
 	if (splash_surf) {
 #if SDL_VERSION_ATLEAST(2,0,0)
 		SDL_SetSurfaceBlendMode(splash_surf, SDL_BLENDMODE_BLEND);
@@ -1931,6 +2018,9 @@ static void GUI_StartUp(Section * sec) {
 				}
 			}
 			if (exit_splash) break;
+#if defined(EMSCRIPTEN) && defined(EMTERPRETER_SYNC)
+			emscripten_sleep_with_yield(1);
+#endif
 
 			if (ct<1) {
 				SDL_FillRect(sdl.surface, NULL, SDL_MapRGB(sdl.surface->format, 0, 0, 0));
@@ -1984,7 +2074,7 @@ static void GUI_StartUp(Section * sec) {
 		delete [] tmpbufp;
 
 	}
-
+#endif // !defined(EMSCRIPTEN) || defined(EMTERPRETER_SYNC)
 	/* Get some Event handlers */
 	MAPPER_AddHandler(KillSwitch,MK_f9,MMOD1,"shutdown","ShutDown");
 	MAPPER_AddHandler(CaptureMouse,MK_f10,MMOD1,"capmouse","Cap Mouse");
@@ -2310,7 +2400,15 @@ void GFX_Events() {
 		case SDL_KEYDOWN:
 		case SDL_KEYUP:
 			/* On macs CMD-Q is the default key to close an application */
-			if (event.key.keysym.sym == SDLK_q && (event.key.keysym.mod == KMOD_RMETA || event.key.keysym.mod == KMOD_LMETA) ) {
+			if (event.key.keysym.sym == SDLK_q &&
+#if SDL_VERSION_ATLEAST(2,0,0)
+			    (event.key.keysym.mod == KMOD_RGUI ||
+			     event.key.keysym.mod == KMOD_LGUI)
+#else
+			    (event.key.keysym.mod == KMOD_RMETA ||
+			     event.key.keysym.mod == KMOD_LMETA)
+#endif
+			    ) {
 				KillSwitch(true);
 				break;
 			} 
@@ -2669,7 +2767,7 @@ int main(int argc, char* argv[]) {
 #endif  //defined(WIN32) && !(C_DEBUG)
 		if (control->cmdline->FindExist("-version") ||
 		    control->cmdline->FindExist("--version") ) {
-			printf("\nDOSBox version %s, copyright 2002-2013 DOSBox Team.\n\n",VERSION);
+			printf("\nDOSBox version %s, copyright 2002-2015 DOSBox Team.\n\n",VERSION);
 			printf("DOSBox is written by the DOSBox Team (See AUTHORS file))\n");
 			printf("DOSBox comes with ABSOLUTELY NO WARRANTY.  This is free software,\n");
 			printf("and you are welcome to redistribute it under certain conditions;\n");
@@ -2695,9 +2793,17 @@ int main(int argc, char* argv[]) {
         setbuf(stderr, NULL);
 #endif
 
+#ifdef EMSCRIPTEN
+	if (emscripten_set_pointerlockchange_callback(NULL, NULL, true,
+	                                              em_pointerlock_callback)
+	    == EMSCRIPTEN_RESULT_SUCCESS) {
+		use_capture_callback = true;
+	}
+#endif
+
 	/* Display Welcometext in the console */
 	LOG_MSG("DOSBox version %s", VERSION_TEXT);
-	LOG_MSG("Copyright 2002-2013 DOSBox Team, published under GNU GPL.");
+	LOG_MSG("Copyright 2002-2015 DOSBox Team, published under GNU GPL.");
 	LOG_MSG("---");
 
 	/* Init SDL */
@@ -2721,9 +2827,17 @@ int main(int argc, char* argv[]) {
 		|SDL_INIT_NOPARACHUTE
 		) < 0 ) E_Exit("Can't init SDL %s",SDL_GetError());
 	sdl.inited = true;
+#if SDL_VERSION_ATLEAST(2,0,0)
+	/* Text input is enabled by video init if there is no on screen keyboard.
+	 * It is not used by DOSBox. Emscripten SDL 2 will only override default
+	 * actions for keys in Chrome, Safari and IE if text input is disabled,
+	 * because they must be overridden in keydown, not keypress.
+	 */
+	if (SDL_IsTextInputActive()) SDL_StopTextInput();
+#endif
 
 #ifndef DISABLE_JOYSTICK
-	//Initialise Joystick seperately. This way we can warn when it fails instead
+	//Initialise Joystick separately. This way we can warn when it fails instead
 	//of exiting the application
 	if( SDL_InitSubSystem(SDL_INIT_JOYSTICK) < 0 ) LOG_MSG("Failed to init joystick support");
 #endif

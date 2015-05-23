@@ -1,5 +1,5 @@
  /*
- *  Copyright (C) 2002-2013  The DOSBox Team
+ *  Copyright (C) 2002-2015  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -173,8 +173,16 @@ typedef struct {
 	Bit8u curmode;
 	Bit16u originx, originy;
 	Bit8u fstackpos, bstackpos;
-	Bit8u forestack[4];
-	Bit8u backstack[4];
+	union {
+		Bit8u u8[4];
+		Bit16u u16;
+		Bit32u u32;
+	} forestack;
+	union {
+		Bit8u u8[4];
+		Bit16u u16;
+		Bit32u u32;
+	} backstack;
 	Bit16u startaddr;
 	Bit8u posx, posy;
 	Bit8u mc[64][64];

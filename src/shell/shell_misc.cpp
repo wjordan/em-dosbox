@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2002-2013  The DOSBox Team
+ *  Copyright (C) 2002-2015  The DOSBox Team
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -21,9 +21,6 @@
 #include <string.h>
 #include <algorithm> //std::copy
 #include <iterator>  //std::front_inserter
-#ifdef EMSCRIPTEN
-#include <emscripten.h>
-#endif
 #include "shell.h"
 #include "regs.h"
 #include "callback.h"
@@ -43,7 +40,7 @@ static void outc(Bit8u c) {
 }
 
 void DOS_Shell::InputCommand(char * line) {
-#ifdef EMSCRIPTEN
+#if defined(EMSCRIPTEN) && !defined(EMTERPRETER_SYNC)
 	if (!strcmp(Files[input_handle]->name, "CON")) {
 		// This can be called during startup, before main loop being used.
 		LOG_MSG("Emulation ended because interactive shell is not supported.");
@@ -561,13 +558,13 @@ char * DOS_Shell::Which(char * name) {
 	if (!GetEnvStr("PATH",temp)) return 0;
 	const char * pathenv=temp.c_str();
 	if (!pathenv) return 0;
-	pathenv=strchr(pathenv,'=');
+	pathenv = strchr(pathenv,'=');
 	if (!pathenv) return 0;
 	pathenv++;
 	Bitu i_path = 0;
 	while (*pathenv) {
 		/* remove ; and ;; at the beginning. (and from the second entry etc) */
-		while(*pathenv && (*pathenv ==';'))
+		while(*pathenv == ';')
 			pathenv++;
 
 		/* get next entry */
@@ -577,7 +574,7 @@ char * DOS_Shell::Which(char * name) {
 
 		if(i_path == DOS_PATHLENGTH) {
 			/* If max size. move till next ; and terminate path */
-			while(*pathenv != ';') 
+			while(*pathenv && (*pathenv != ';')) 
 				pathenv++;
 			path[DOS_PATHLENGTH - 1] = 0;
 		} else path[i_path] = 0;

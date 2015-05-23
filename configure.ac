@@ -39,6 +39,7 @@ AC_PROG_CPP
 AC_PROG_CXX
 AC_PROG_INSTALL
 AC_PROG_RANLIB
+AM_PROG_AR
 
 dnl This probably needs to be after Automake init
 AM_CONDITIONAL([EMSCRIPTEN_BUILD], [test "x$enable_emscripten" = "xyes"])
@@ -69,10 +70,11 @@ dnl Check for SDL
 dnl When cross-compiling, the SDL prefix needs to be set, so the right
 dnl sdl-config is found. SDL is included with Emscripten and its
 dnl sdl-config does nothing, so just assume SDL is present then.
-AC_ARG_WITH(sdl2, [AC_HELP_STRING([--with-sdl2@<:@=no/PATH@:>@],
-                  [Build using SDL 2.0 instead of SDL 1.2. If using Emscripten,
-                   you can provide a path to SDL-emscripten.])],
-                  [], [with_sdl2=no])
+AC_ARG_WITH(sdl2, [AC_HELP_STRING([--with-sdl2=no/PATH],
+                  [SDL 2 is used by default. Use this option to select SDL 1
+                   instead or provide a path to a custom Emscripten SDL 2
+                   build.])],
+                  [], [with_sdl2=yes])
 AS_IF([test "x$enable_emscripten" != "xyes"],[
 SDL_VERSION=1.2.0
 AM_PATH_SDL(:,
@@ -176,6 +178,12 @@ AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <math.h>]],[[
 ]])], [AC_MSG_RESULT(yes)], [AC_DEFINE([DB_HAVE_NO_POWF],[1],[libm doesn't include powf])])
 LIBS=$LIBS_BACKUP
 
+dnl Look for clock_gettime, a DB_HAVE_CLOCK_GETTIME is set when present
+AH_TEMPLATE([DB_HAVE_CLOCK_GETTIME],[Determines if the function clock_gettime is available.])
+AC_SEARCH_LIBS([clock_gettime], [rt] , [found_clock_gettime=yes], [found_clock_gettime=no])
+if test x$found_clock_gettime = xyes; then
+  AC_DEFINE(DB_HAVE_CLOCK_GETTIME)
+fi
 
 dnl Checks for libraries.
 
@@ -193,7 +201,7 @@ CFLAGS="-Werror"
 
 AH_TEMPLATE([C_ATTRIBUTE_ALWAYS_INLINE],[Determines if the compilers supports always_inline attribute.])
 AC_MSG_CHECKING(if compiler allows __attribute__((always_inline)) )
-AC_COMPILE_IFELSE([AC_LANG_SOURCE([ void __attribute__((always_inline)) test(){}
+AC_COMPILE_IFELSE([AC_LANG_SOURCE([ inline void __attribute__((always_inline)) test(){}
 ])],[ AC_MSG_RESULT(yes);AC_DEFINE(C_ATTRIBUTE_ALWAYS_INLINE)],AC_MSG_RESULT(no))
 
 AH_TEMPLATE([C_ATTRIBUTE_FASTCALL],[Determines if the compilers supports fastcall attribute.])
@@ -378,10 +386,11 @@ else
   AC_MSG_RESULT(no)
 fi 
 
-AH_TEMPLATE(C_FPU_X86,[Define to 1 to use a x86 assembly fpu core])
+AH_TEMPLATE(C_FPU_X86,[Define to 1 to use a x86/x64 assembly fpu core])
 AC_ARG_ENABLE(fpu-x86,AC_HELP_STRING([--disable-fpu-x86],[Disable x86 assembly fpu core]),,enable_fpu_x86=yes)
-AC_MSG_CHECKING(whether x86 assembly fpu core will be enabled) 
-if test x$enable_fpu_x86 = xno ; then 
+AC_ARG_ENABLE(fpu-x64,AC_HELP_STRING([--disable-fpu-x64],[Disable x64 assembly fpu core]),,enable_fpu_x64=yes)
+AC_MSG_CHECKING(whether the x86/x64 assembly fpu core will be enabled) 
+if test x$enable_fpu_x86 = xno -o x$enable_fpu_x64 = xno; then 
    AC_MSG_RESULT(no)
 else
   if test x$enable_fpu = xyes; then
@@ -543,7 +552,7 @@ case "$host" in
        dnl to do more to distinguish them.
        dnl For now I am lazy and do not add proper detection code.
        AC_DEFINE(MACOSX, 1, [Compiling on Mac OS X])
-       LIBS="$LIBS -framework CoreMIDI -framework AudioUnit -framework AudioToolbox"
+       LIBS="$LIBS -framework CoreMIDI -framework AudioUnit -framework AudioToolbox -framework AppKit"
        AC_DEFINE(C_DIRECTSERIAL, 1, [ Define to 1 if you want serial passthrough support (Win32, Posix and OS/2).])
        ;;
     *-*-linux*)
@@ -579,10 +588,18 @@ esac
        AC_SUBST(WINDRES)
 
 
-# SDL configuration for Emscripten
-# This is at the bottom because -lSDL2 breaks compilation of test files
-# above with the host C compiler.
+AH_TEMPLATE([EMTERPRETER_SYNC],[Compile for use with Emscripten emterpreter sync.])
+AC_ARG_ENABLE(
+  [sync],
+  [AC_HELP_STRING([--disable-sync],
+    [Do not use Emscripten emterpreter sync])],
+  [], [enable_sync=yes])
+AM_CONDITIONAL([EMTERPRETER], [test "x$enable_sync" != "xno"])
+
+# Use of Emscripten-specific compiler flags breaks tests compiled with the
+# host compiler, so those flags are set at the end.
 AS_IF([test "x$enable_emscripten" = "xyes"],[
+  AS_IF([test "x$enable_sync" != "xno"], [AC_DEFINE([EMTERPRETER_SYNC],[1])])
   AS_IF([test "x$with_sdl2" != "xno"],[
     AS_IF([test "x$with_sdl2" = "xyes"],
       [CXXFLAGS="$CXXFLAGS -s USE_SDL=2"],
